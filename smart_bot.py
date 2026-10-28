@@ -1,19 +1,18 @@
 import os
+import threading
+from flask import Flask
 import telebot
-from flask import Flask, request, abort
 from openai import OpenAI
 
 # 1. Ключи из переменных окружения
 BOT_TOKEN = os.environ.get('BOT_TOKEN')
 AI_API_KEY = os.environ.get('AI_API_KEY')
-RENDER_EXTERNAL_URL = os.environ.get('RENDER_EXTERNAL_URL')
 
-if not BOT_TOKEN or not AI_API_KEY or not RENDER_EXTERNAL_URL:
-    raise ValueError("Не заданы переменные окружения BOT_TOKEN, AI_API_KEY или RENDER_EXTERNAL_URL")
+if not BOT_TOKEN or not AI_API_KEY:
+    raise ValueError("Не заданы переменные окружения BOT_TOKEN и AI_API_KEY")
 
-# 2. Инициализация
+# 2. Инициализация бота и OpenAI
 bot = telebot.TeleBot(BOT_TOKEN)
-app = Flask(__name__)
 client = OpenAI(base_url="https://openrouter.ai/api/v1", api_key=AI_API_KEY)
 
 SYSTEM_PROMPT = """
@@ -25,7 +24,7 @@ SYSTEM_PROMPT = """
 Отвечай кратко, с юмором и в образе.
 """
 
-# 3. Обработчики сообщений (логика бота)
+# 3. Логика бота
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
     bot.reply_to(message, "Приветствую, путник! Я старый волшебник Мерлин. Спроси меня о чем-нибудь!")
@@ -45,27 +44,28 @@ def handle_message(message):
     except Exception as e:
         bot.reply_to(message, f"Ошибка магии: {e}")
 
-# 4. Настройка веб-сервера для webhook
-@app.route('/', methods=['GET'])
+# 4. Запуск бота в фоновом потоке
+def run_bot():
+    print("Бот запущен в фоновом режиме...")
+    bot.infinity_polling()
+
+# 5. Flask-приложение для Render
+app = Flask(__name__)
+
+@app.route('/')
 def index():
-    return "Бот работает!"
+    return "Бот работает! (Flask + polling)"
 
-@app.route('/' + BOT_TOKEN, methods=['POST'])
-def webhook():
-    if request.headers.get('content-type') == 'application/json':
-        json_string = request.get_data().decode('utf-8')
-        update = telebot.types.Update.de_json(json_string)
-        bot.process_new_updates([update])
-        return ''
-    else:
-        abort(403)
+@app.route('/health')
+def health():
+    return "OK"
 
-# 5. Установка webhook и запуск сервера
 if __name__ == "__main__":
-    # Удаляем старый webhook и устанавливаем новый
-    bot.remove_webhook()
-    bot.set_webhook(url=f"{RENDER_EXTERNAL_URL}/{BOT_TOKEN}")
+    # Запускаем бота в отдельном потоке
+    bot_thread = threading.Thread(target=run_bot)
+    bot_thread.daemon = True
+    bot_thread.start()
     
-    # Запускаем Flask на порту, который предоставит Render
+    # Запускаем Flask на порту, который даёт Render
     port = int(os.environ.get('PORT', 10000))
     app.run(host='0.0.0.0', port=port)
